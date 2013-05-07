@@ -11,42 +11,62 @@ import datetime as dt
 from fabric.api import local, settings, hide
 
 # TODO - replace the placeholder code with a real implementation
-def process_timeslot(product, timeslot_string, db_name, db_user, db_pass):
-    product_patterns = {
-        'LST' : re.compile(r''),
-    }
-    prod_patt = product_patterns.get(product)
-    if prod_patt is not None:
-        working_dir_path = dt.datetime.utcnow().strftime('/tmp/working_dir_' \
-                                                         '%Y%m%d%H%M%S')
-        local('mkdir --parents %s' % working_dir_path)
-        timeslot = dt.datetime.strptime(timeslot_string, '%Y%m%d%H%M')
-        tiles = _get_tiles(prod_patt, timeslot, working_dir_path,
-                           archive_host, archive_path)
-        georefs = _georeference_tiles(working_dir_path, *tiles)
-        global_datasets = _merge_tiles(working_dir_path, *georefs)
-        _import_into_database(db_name, db_user, db_pass, *global_datasets)
-        local('rm -rf %s' % working_dir_path)
+def process_timeslot(working_dir, product, timeslot,
+                     db_name=None, db_user=None, db_pass=None):
+    patt = r'^g2_BIOPAR_%s_%s_[A-Z]+_GEO_v1$' % (product, timeslot)
+    tiles = _get_tiles(working_dir, patt)
+    georefs = _georeference_tiles(*tiles)
+    global_datasets = _merge_tiles(*georefs)
+    #_import_into_database(db_name, db_user, db_pass, *global_datasets)
 
-def _get_tiles(product_re, timeslot, destination_directory,
-               archive_host, archive_path):
+def _get_tiles(working_dir, file_name_pattern):
     '''
-    Retreive the correct product tiles from the archive and bunzip them.
+    Return a list with the full paths to the tiles to process.
 
-    The tiles get fetched to the working_directory and are bunzipped in
-    place.
+    Inputs:
+
+        working_dir - The directory where the files are located.
+
+        file_name_pattern - A string with a regex pattern for searching
+            against the file names.
     '''
 
     tiles = []
+    for entry in os.listdir(working_dir):
+        if re.search(file_name_pattern, entry) is not None:
+            tiles.append(os.path.realpath(os.path.join(working_dir, entry)))
     return tiles
 
-def _merge_tiles(destination_directory, *tiles):
+def _merge_tiles(*tiles):
     '''
     Take the already georeferenced tiles and merge them into a global mosaic.
     '''
 
     mosaics = []
-    # is it necessary to build overview files?
+    datasets = dict()
+    for path in tiles:
+        dataset = re.search('v1_(\w+).tif$', path).group(1)
+        if dataset in datasets.keys():
+            datasets[dataset].append(path)
+        else:
+            datasets[dataset] = [path]
+    for dataset, tiles in datasets.iteritems():
+        print('file: %s' % tiles[0])
+        md = _get_geotiff_metadata(tiles[0])
+
+        output_dir = os.path.dirname(tiles[0])
+        #timeslot = re.search(r'_(\d{12})_', tiles[0]).group(1)
+        #product = re.search(r'g2_BIOPAR_([A-Za-z0-9]+)_', tiles[0]).group(1)
+        output_path = '%s/global_%s_%s_%s.tif' % (output_dir, md['product'],
+                                                  md['timeslot'], dataset)
+        print('timeslot: %s' % md['timeslot'])
+        print('product: %s' % md['product'])
+        print('missing_value' % md['missing_value'])
+        print('output_path: %s' % output_path)
+
+        local('gdal_merge.py -o %s -a_nodata %s %s' % (output_path,
+              md['missing_value']), ' '.join(tiles))
+        mosaics.append(output_path)
     return mosaics
 
 def _import_into_database(db_name, db_user, db_pass, *global_datasets):
@@ -56,13 +76,14 @@ def _import_into_database(db_name, db_user, db_pass, *global_datasets):
 
     pass
 
-#TODO - the bounds are not being calculated correctly
 def _georeference_tiles(*tiles):
     '''
     Take the product HDF5 tiles and georeference them.
     '''
 
+    georefs = []
     for tile in tiles:
+        working_dir = os.path.dirname(tile)
         general_md = _get_general_metadata(tile)
         for ds_path in general_md.get('subdatasets', []):
             dataset_md = _get_dataset_metadata(ds_path)
@@ -72,12 +93,22 @@ def _georeference_tiles(*tiles):
                                                    dataset_md['n_lines'],
                                                    general_md['pixel_size'])
             path, extension = os.path.splitext(tile)
-            output_path = '%s_%s.tif' % path, dataset_md['name'])
-            output_crs = '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
+            output_path = '%s_%s.tif' % (path, dataset_md['name'])
+            #output_crs = '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
+            output_crs = 'EPSG:4326'
             local('gdal_translate -of GTiff -a_srs "%s" -a_ullr %6.3f ' \
                   '%6.3f %6.3f %6.3f -a_nodata %s %s %s' % (output_crs, ulx,
                   uly, lrx, lry, dataset_md['missing_value'], ds_path,
                   output_path))
+            georefs.append(output_path)
+    return georefs
+
+def _calculate_bounds(first_lon, first_lat, n_cols, n_lines, pixel_size):
+    upper_left_lon = first_lon - pixel_size / 2.0
+    upper_left_lat = first_lat + pixel_size / 2.0
+    lower_right_lon = upper_left_lon + n_cols * pixel_size
+    lower_right_lat = upper_left_lat - n_lines * pixel_size
+    return upper_left_lon, upper_left_lat, lower_right_lon, lower_right_lat
 
 def _get_general_metadata(h5_path):
     '''
@@ -143,14 +174,29 @@ def _get_dataset_metadata(file_path):
             metadata['name'] = dataset_name_obj.group(1)
     return metadata
 
+def _get_geotiff_metadata(file_path):
+    metadata = dict()
+    the_info = _run_gdalinfo(file_path)
+    missing_value_re = re.compile(r'NoData Value=(-?\d+)')
+    product_re = re.compile(r'^PRODUCT=(\w+)')
+    dataset_re = re.compile(r'_PRODUCT=(\w+)')
+    timeslot_re = re.compile(r'^IMAGE_ACQUISITION_TIME=(\d{12})')
+    for line in the_info.split():
+        mv_obj = missing_value_re.search(line)
+        p_obj = product_re.search(line)
+        d_obj = dataset_re.search(line)
+        t_obj = timeslot_re.search(line)
+        if mv_obj is not None:
+            metadata['missing_value'] = int(mv_obj.group(1))
+        elif p_obj is not None:
+            metadata['product'] = p_obj.group(1)
+        elif d_obj is not None:
+            metadata['dataset'] = d_obj.group(1)
+        elif t_obj is not None:
+            metadata['timeslot'] = t_obj.group(1)
+    return metadata
+
 def _run_gdalinfo(file_path):
     with settings(hide('stdout')):
         result = local('gdalinfo %s' % file_path, capture=True)
     return result
-
-def _calculate_bounds(first_lon, first_lat, n_cols, n_lines, pixel_size):
-    upper_left_lon = first_lon - pixel_size / 2.0
-    upper_left_lat = first_lat + pixel_size / 2.0
-    lower_right_lon = upper_left_lon * n_cols
-    lower_right_lat = -upper_left_lat * n_lines
-    return upper_left_lon, upper_left_lat, lower_right_lon, lower_right_lat
