@@ -53,15 +53,14 @@ def _merge_tiles(*tiles):
     for dataset, tiles in datasets.iteritems():
         print('file: %s' % tiles[0])
         md = _get_geotiff_metadata(tiles[0])
+        print('md: %s' % md)
 
         output_dir = os.path.dirname(tiles[0])
-        #timeslot = re.search(r'_(\d{12})_', tiles[0]).group(1)
-        #product = re.search(r'g2_BIOPAR_([A-Za-z0-9]+)_', tiles[0]).group(1)
         output_path = '%s/global_%s_%s_%s.tif' % (output_dir, md['product'],
                                                   md['timeslot'], dataset)
         print('timeslot: %s' % md['timeslot'])
         print('product: %s' % md['product'])
-        print('missing_value' % md['missing_value'])
+        print('missing_value: %s' % md['missing_value'])
         print('output_path: %s' % output_path)
 
         local('gdal_merge.py -o %s -a_nodata %s %s' % (output_path,
@@ -96,10 +95,11 @@ def _georeference_tiles(*tiles):
             output_path = '%s_%s.tif' % (path, dataset_md['name'])
             #output_crs = '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
             output_crs = 'EPSG:4326'
-            local('gdal_translate -of GTiff -a_srs "%s" -a_ullr %6.3f ' \
-                  '%6.3f %6.3f %6.3f -a_nodata %s %s %s' % (output_crs, ulx,
-                  uly, lrx, lry, dataset_md['missing_value'], ds_path,
-                  output_path))
+            with settings(hide('stdout')):
+                local('gdal_translate -q -of GTiff -a_srs "%s" -a_ullr ' \
+                      '%6.3f %6.3f %6.3f %6.3f -a_nodata %s %s %s' % \
+                      (output_crs, ulx, uly, lrx, lry, 
+                      dataset_md['missing_value'], ds_path, output_path))
             georefs.append(output_path)
     return georefs
 
@@ -118,13 +118,13 @@ def _get_general_metadata(h5_path):
     the_info = _run_gdalinfo(h5_path)
     metadata = dict()
     metadata['subdatasets'] = []
-    lat_re = re.compile(r'FIRST_LAT=(-?\d+)$')
-    lon_re = re.compile(r'FIRST_LON=(-?\d+)$')
-    timeslot_re = re.compile(r'IMAGE_ACQUISITION_TIME=(\d+)$')
-    pixelsize_re = re.compile(r'PIXEL_SIZE=(\d+\.?\d*)$')
-    product_re = re.compile(r'^PRODUCT=(\w+)$')
-    subdatasets_re = re.compile(r'SUBDATASET_\d_NAME=(HDF5:.*)$')
-    for line in the_info.split():
+    lat_re = re.compile(r'FIRST_LAT=(-?\d+)')
+    lon_re = re.compile(r'FIRST_LON=(-?\d+)')
+    timeslot_re = re.compile(r'IMAGE_ACQUISITION_TIME=(\d+)')
+    pixelsize_re = re.compile(r'PIXEL_SIZE=(\d+\.?\d*)')
+    product_re = re.compile(r'^PRODUCT=(\w+)')
+    subdatasets_re = re.compile(r'SUBDATASET_\d_NAME=(HDF5:.*)')
+    for line in the_info.split('\n'):
         lat_obj = lat_re.search(line)
         lon_obj = lon_re.search(line)
         timeslot_obj = timeslot_re.search(line)
@@ -151,12 +151,12 @@ def _get_general_metadata(h5_path):
 def _get_dataset_metadata(file_path):
     metadata = dict()
     the_info = _run_gdalinfo(file_path)
-    missing_value_re = re.compile(r'MISSING_VALUE=(-?\d+)$')
-    n_cols_re = re.compile(r'N_COLS=(\d+)$')
-    n_lines_re = re.compile(r'N_LINES=(\d+)$')
-    scaling_factor_re = re.compile(r'SCALING_FACTOR=(\d+)$')
-    dataset_name_re = re.compile(r'_PRODUCT=(\w+)$')
-    for line in the_info.split():
+    missing_value_re = re.compile(r'MISSING_VALUE=(-?\d+)')
+    n_cols_re = re.compile(r'N_COLS=(\d+)')
+    n_lines_re = re.compile(r'N_LINES=(\d+)')
+    scaling_factor_re = re.compile(r'SCALING_FACTOR=(\d+)')
+    dataset_name_re = re.compile(r'_PRODUCT=(\w+)')
+    for line in the_info.split('\n'):
         missing_value_obj = missing_value_re.search(line)
         n_cols_obj = n_cols_re.search(line)
         n_lines_obj = n_lines_re.search(line)
@@ -178,10 +178,10 @@ def _get_geotiff_metadata(file_path):
     metadata = dict()
     the_info = _run_gdalinfo(file_path)
     missing_value_re = re.compile(r'NoData Value=(-?\d+)')
-    product_re = re.compile(r'^PRODUCT=(\w+)')
+    product_re = re.compile(r'(?<!_)PRODUCT=(\w+)')
     dataset_re = re.compile(r'_PRODUCT=(\w+)')
-    timeslot_re = re.compile(r'^IMAGE_ACQUISITION_TIME=(\d{12})')
-    for line in the_info.split():
+    timeslot_re = re.compile(r'IMAGE_ACQUISITION_TIME=(\d{12})')
+    for line in the_info.split('\n'):
         mv_obj = missing_value_re.search(line)
         p_obj = product_re.search(line)
         d_obj = dataset_re.search(line)
