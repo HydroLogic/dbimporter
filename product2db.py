@@ -3,6 +3,24 @@
 
 '''
 This script will mosaic and georeference GIO tiles from a single product.
+
+Strategy to adopt:
+
+    - Add georeferencing information to each tile from a single product. Use
+      gdal_translate to extract metadata for each tile and add the relevant CRS
+      definitions. Add also the correct noData value to each file;
+    - Gather all the tiles into global mosaics, one for each subdataset. Use
+      gdal_merge;
+    - Build a vrt file that combines the global georeferenced subdatasets into
+      a single multiband file. The VRT file can be updated with the relevant
+      scalingFactor for each band using the Scale tag;
+    - import the vrt into a Postgis database as a raster. Use raster2pgsql
+      with a tilesize of 200x200.
+
+NOTES:
+
+    - When creating the Postgis database, remember to alter the permissions on
+      the tables after creating the postgis extension
 '''
 
 import re
@@ -64,13 +82,15 @@ def _merge_tiles(*tiles):
         print('output_path: %s' % output_path)
 
         local('gdal_merge.py -o %s -a_nodata %s %s' % (output_path,
-              md['missing_value']), ' '.join(tiles))
+              md['missing_value'], ' '.join(tiles)))
         mosaics.append(output_path)
     return mosaics
 
 def _import_into_database(db_name, db_user, db_pass, *global_datasets):
     '''
     Take the global mosaic and import it into the PostGIS database.
+
+    Will use the raster2pgsql utility
     '''
 
     pass
@@ -78,6 +98,9 @@ def _import_into_database(db_name, db_user, db_pass, *global_datasets):
 def _georeference_tiles(*tiles):
     '''
     Take the product HDF5 tiles and georeference them.
+
+    Note that GDAL uses top left corner of pixel as a way to anchor its
+    coordinates.
     '''
 
     georefs = []

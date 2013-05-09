@@ -1,0 +1,64 @@
+<VRTDataset rasterXSize="7200" rasterYSize="2800">
+<SRS>EPSG:4326</SRS>
+<GeoTransform>-170.025, 0.05, 0, 80.025, 0, -0.05</GeoTransform>
+<VRTRasterBand dataType="Int16" band="1">
+    <Description>LST</Description>
+    <NoDataValue>-8000</NoDataValue>
+    <Scale>1.0</Scale>
+    <SimpleSource>
+        <SourceFileName relativeToVrt="1">global_LST_201305011200_LST.tif</SourceFileName>
+        <SourceBand>1</SourceBand>
+        <SourceProperties RasterXSize="7200" RasterYSize="2800" DataType="UInt16" BlockXSize="7200" BlockYSize="1"/>
+        <SrcRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+        <DstRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+    </SimpleSource>
+</VRTRasterBand>
+<VRTRasterBand dataType="Int16" band="2">
+    <Description>Q_FLAGS</Description>
+    <NoDataValue>32</NoDataValue>
+    <Scale>1.0</Scale>
+    <SimpleSource>
+        <SourceFileName relativeToVrt="1">global_LST_201305011200_Q_FLAGS.tif</SourceFileName>
+        <SourceBand>1</SourceBand>
+        <SourceProperties RasterXSize="7200" RasterYSize="2800" DataType="UInt16" BlockXSize="7200" BlockYSize="1"/>
+        <SrcRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+        <DstRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+    </SimpleSource>
+</VRTRasterBand>
+<VRTRasterBand dataType="Int16" band="3">
+    <Description>errorbar_LST</Description>
+    <NoDataValue>-1</NoDataValue>
+    <Scale>1.0</Scale>
+    <SimpleSource>
+        <SourceFileName relativeToVrt="1">global_LST_201305011200_errorbar_LST.tif</SourceFileName>
+        <SourceBand>1</SourceBand>
+        <SourceProperties RasterXSize="7200" RasterYSize="2800" DataType="UInt16" BlockXSize="7200" BlockYSize="1"/>
+        <SrcRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+        <DstRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+    </SimpleSource>
+</VRTRasterBand>
+<VRTRasterBand dataType="Int16" band="4">
+    <Description>FRAC_PROC_PIXELS</Description>
+    <NoDataValue>-1</NoDataValue>
+    <Scale>1.0</Scale>
+    <SimpleSource>
+        <SourceFileName relativeToVrt="1">global_LST_201305011200_FRAC_PROC_PIXELS.tif</SourceFileName>
+        <SourceBand>1</SourceBand>
+        <SourceProperties RasterXSize="7200" RasterYSize="2800" DataType="UInt16" BlockXSize="7200" BlockYSize="1"/>
+        <SrcRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+        <DstRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+    </SimpleSource>
+</VRTRasterBand>
+<VRTRasterBand dataType="Int16" band="5">
+    <Description>TIME</Description>
+    <NoDataValue>-99</NoDataValue>
+    <Scale>1.0</Scale>
+    <SimpleSource>
+        <SourceFileName relativeToVrt="1">global_LST_201305011200_TIME.tif</SourceFileName>
+        <SourceBand>1</SourceBand>
+        <SourceProperties RasterXSize="7200" RasterYSize="2800" DataType="UInt16" BlockXSize="7200" BlockYSize="1"/>
+        <SrcRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+        <DstRect xOff="0" yOff="0" xSize="7200" ySize="2800"/>
+    </SimpleSource>
+</VRTRasterBand>
+</VRTDataset>
