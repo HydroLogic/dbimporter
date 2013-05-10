@@ -26,6 +26,8 @@ NOTES:
 import re
 import os
 import datetime as dt
+
+from lxml import etree
 from fabric.api import local, settings, hide
 
 # TODO - replace the placeholder code with a real implementation
@@ -86,6 +88,47 @@ def _merge_tiles(*tiles):
         mosaics.append(output_path)
     return mosaics
 
+def _build_vrt(*global_files):
+    '''
+    Build a VRT file with each of the already created global files as a band.
+    '''
+
+    x_size = 7200
+    y_size = 2800
+    dtype = 'Int16'
+    root = etree.Element('VRTDataset', rasterXSize=x_size, rasterYSize=y_size)
+    srs = etree.SubElement(root, 'srs')
+    srs.text = 'EPSG:4326'
+    geo_transform = etree.SubElement(root, 'GeoTransform')
+    geo_transform.text = '-170.025, 0.05, 0, 80.025, 0, -0.05'
+    for i, file_path in enumerate(global_files):
+        band = etree.SubElement(root, 'VRTRasterBand', 
+                                {'dataType' : dtype, 'band': i+1})
+        description = etree.SubElement(band, 'Description')
+        description.text = ''
+        no_data = etree.SubElement(band, 'NoDataValue')
+        no_data.text = ''
+        scale = etree.SubElement(band, 'Scale')
+        scale.text = ''
+        source = etree.SubElement(band, 'SimpleSource')
+        file_path = etree.SubElement(source, 'SourceFileName', 
+                                     {'relativeToVrt' : 0})
+        file_path.text = ''
+        source_band = etree.SubElement(source, 'SourceBand')
+        source_band.text = '1'
+        source_properties = etree.SubElement(source, 'SourceProperties',
+                                             {'RasterXSize' : x_size,
+                                              'RasterYSize' : y_size,
+                                              'DataType' : dtype,
+                                              'BlockXSize' : x_size,
+                                              'BlockYSize' : 1})
+        src_rect = etree.SubElement(source, 'SrcRect', {'xOff' : 0,
+                                                        'yOff' : 0,
+                                                        'xSize' : x_size,
+                                                        'ySize' : y_size})
+    tree = etree.ElementTree(root)
+    tree.write('', pretty_print=True)
+
 def _import_into_database(db_name, db_user, db_pass, *global_datasets):
     '''
     Take the global mosaic and import it into the PostGIS database.
@@ -116,7 +159,6 @@ def _georeference_tiles(*tiles):
                                                    general_md['pixel_size'])
             path, extension = os.path.splitext(tile)
             output_path = '%s_%s.tif' % (path, dataset_md['name'])
-            #output_crs = '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
             output_crs = 'EPSG:4326'
             with settings(hide('stdout')):
                 local('gdal_translate -q -of GTiff -a_srs "%s" -a_ullr ' \
@@ -223,3 +265,10 @@ def _run_gdalinfo(file_path):
     with settings(hide('stdout')):
         result = local('gdalinfo %s' % file_path, capture=True)
     return result
+
+def _extract_metadata(gdalinfo_stdout):
+    md_line = False
+    metadata = dict()
+    for line in gdalinfo_stdout.split('\n'):
+        if re.search('^Metadata:\s*$', line) is not None:
+            pass
