@@ -267,8 +267,44 @@ def _run_gdalinfo(file_path):
     return result
 
 def _extract_metadata(gdalinfo_stdout):
-    md_line = False
+    start_md_line = False
     metadata = dict()
     for line in gdalinfo_stdout.split('\n'):
-        if re.search('^Metadata:\s*$', line) is not None:
-            pass
+        if start_md_line:
+            line_obj = re.search(r'^\s+(?P<key>\w+)=(?P<value>.*)$', line)
+            if line_obj is not None:
+                group = line_obj.groupdict()
+                metadata[group['key']] = group['value']
+            else:
+                start_md_line = False
+        else:
+            if re.search('^\s*Metadata:\s*$', line) is not None:
+                start_md_line = True
+    return metadata
+
+def _extract_subdataset_paths(gdalinfo_stdout):
+    subdatasets = dict()
+    for line in gdalinfo_stdout.split('\n'):
+        line_obj = re.search(r'^\s+SUBDATASET_\d+_NAME=(.*)', line)
+        if line_obj is not None:
+            ds_path = line_obj.group(1)
+            ds_name = re.search(r'//(\w+)', ds_path).group(1)
+            subdatasets[ds_name] = ds_path
+    return subdatasets
+
+def _extract_band_properties(gdalinfo_stdout):
+    bands = dict()
+    for line in gdalinfo_stdout.split('\n'):
+        line_obj = re.search(r'^Band (\d) Block=(\d+)x(\d+) Type=(\w+),',
+                             line)
+        if line_obj is not None:
+            g = line_obj.group
+            bands[g(1)] = {'block_x' : g(2), 'block_y' : g(3), 'dtype' : g(4)}
+    return bands
+
+def get_meta(file_path):
+    info = _run_gdalinfo(file_path)
+    meta = _extract_metadata(info)
+    datasets = _extract_subdataset_paths(info)
+    bands = _extract_band_properties(info)
+    return meta, datasets, bands
