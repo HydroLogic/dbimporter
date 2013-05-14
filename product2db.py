@@ -31,13 +31,13 @@ from lxml import etree
 from fabric.api import local, settings, hide
 
 # TODO - replace the placeholder code with a real implementation
-def process_timeslot(working_dir, product, timeslot,
-                     db_name=None, db_user=None, db_pass=None):
-    patt = r'^g2_BIOPAR_%s_%s_[A-Z]+_GEO_v1$' % (product, timeslot)
-    tiles = _get_tiles(working_dir, patt)
-    georefs = _georeference_tiles(*tiles)
-    global_datasets = _merge_tiles(*georefs)
-    #_import_into_database(db_name, db_user, db_pass, *global_datasets)
+#def process_timeslot(working_dir, product, timeslot,
+#                     db_name=None, db_user=None, db_pass=None):
+#    patt = r'^g2_BIOPAR_%s_%s_[A-Z]+_GEO_v1$' % (product, timeslot)
+#    tiles = _get_tiles(working_dir, patt)
+#    georefs = _georeference_tiles(*tiles)
+#    global_datasets = _merge_tiles(*georefs)
+#    #_import_into_database(db_name, db_user, db_pass, *global_datasets)
 
 def _get_tiles(working_dir, file_name_pattern):
     '''
@@ -138,35 +138,45 @@ def _import_into_database(db_name, db_user, db_pass, *global_datasets):
 
     pass
 
-def _georeference_tiles(*tiles):
-    '''
-    Take the product HDF5 tiles and georeference them.
-
-    Note that GDAL uses top left corner of pixel as a way to anchor its
-    coordinates.
-    '''
-
-    georefs = []
-    for tile in tiles:
-        working_dir = os.path.dirname(tile)
-        general_md = _get_general_metadata(tile)
-        for ds_path in general_md.get('subdatasets', []):
-            dataset_md = _get_dataset_metadata(ds_path)
-            ulx, uly, lrx, lry = _calculate_bounds(general_md['first_lon'],
-                                                   general_md['first_lat'],
-                                                   dataset_md['n_cols'],
-                                                   dataset_md['n_lines'],
-                                                   general_md['pixel_size'])
-            path, extension = os.path.splitext(tile)
-            output_path = '%s_%s.tif' % (path, dataset_md['name'])
-            output_crs = 'EPSG:4326'
-            with settings(hide('stdout')):
-                local('gdal_translate -q -of GTiff -a_srs "%s" -a_ullr ' \
-                      '%6.3f %6.3f %6.3f %6.3f -a_nodata %s %s %s' % \
-                      (output_crs, ulx, uly, lrx, lry, 
-                      dataset_md['missing_value'], ds_path, output_path))
-            georefs.append(output_path)
-    return georefs
+#def _georeference_tiles(*tiles):
+#    '''
+#    Take the product HDF5 tiles and georeference them.
+#
+#    Note that GDAL uses top left corner of pixel as a way to anchor its
+#    coordinates.
+#    '''
+#
+#    georefs = []
+#    for tile in tiles:
+#        working_dir = os.path.dirname(tile)
+#
+#        tile_meta = _extract_metadata(tile)
+#        tile_datasets = _extract_subdataset_paths(tile)
+#        for ds_name, ds_path in tile_datasets.iteritems():
+#            ds_meta = _extract_metadata(ds_path)
+#            ulx, uly, lrx, lry = _calculate_bounds(tile_meta['FIRST_LON'],
+#                                                   tile_meta['FIRST_LAT'],
+#                                                   ds_meta['N_COLS'],
+#                                                   ds_meta['N_LINES'],
+#                                                   tile_meta['PIXEL_SIZE'])
+#        #general_md = _get_general_metadata(tile)
+#        #for ds_path in general_md.get('subdatasets', []):
+#        #    dataset_md = _get_dataset_metadata(ds_path)
+#        #    ulx, uly, lrx, lry = _calculate_bounds(general_md['first_lon'],
+#        #                                           general_md['first_lat'],
+#        #                                           dataset_md['n_cols'],
+#        #                                           dataset_md['n_lines'],
+#        #                                           general_md['pixel_size'])
+#            path, extension = os.path.splitext(tile)
+#            output_path = '%s_%s.tif' % (path, ds_name)
+#            output_crs = 'EPSG:4326'
+#            with settings(hide('stdout')):
+#                local('gdal_translate -q -of GTiff -a_srs "%s" -a_ullr ' \
+#                      '%6.3f %6.3f %6.3f %6.3f -a_nodata %s %s %s' % \
+#                      (output_crs, ulx, uly, lrx, lry,
+#                      dataset_md['missing_value'], ds_path, output_path))
+#            georefs.append(output_path)
+#    return georefs
 
 def _calculate_bounds(first_lon, first_lat, n_cols, n_lines, pixel_size):
     upper_left_lon = first_lon - pixel_size / 2.0
@@ -174,112 +184,126 @@ def _calculate_bounds(first_lon, first_lat, n_cols, n_lines, pixel_size):
     lower_right_lon = upper_left_lon + n_cols * pixel_size
     lower_right_lat = upper_left_lat - n_lines * pixel_size
     return upper_left_lon, upper_left_lat, lower_right_lon, lower_right_lat
-
-def _get_general_metadata(h5_path):
-    '''
-    retrieve subdatasets, first lat and lon, no data, missing value, pixel size, etc.
-    '''
-
-    the_info = _run_gdalinfo(h5_path)
-    metadata = dict()
-    metadata['subdatasets'] = []
-    lat_re = re.compile(r'FIRST_LAT=(-?\d+)')
-    lon_re = re.compile(r'FIRST_LON=(-?\d+)')
-    timeslot_re = re.compile(r'IMAGE_ACQUISITION_TIME=(\d+)')
-    pixelsize_re = re.compile(r'PIXEL_SIZE=(\d+\.?\d*)')
-    product_re = re.compile(r'^PRODUCT=(\w+)')
-    subdatasets_re = re.compile(r'SUBDATASET_\d_NAME=(HDF5:.*)')
-    for line in the_info.split('\n'):
-        lat_obj = lat_re.search(line)
-        lon_obj = lon_re.search(line)
-        timeslot_obj = timeslot_re.search(line)
-        pixelsize_obj = pixelsize_re.search(line)
-        product_obj = product_re.search(line)
-        subdatasets_obj = subdatasets_re.search(line)
-        if lat_obj is not None:
-            metadata['first_lat'] = float(lat_obj.group(1))
-        elif lon_obj is not None:
-            metadata['first_lon'] = float(lon_obj.group(1))
-        elif timeslot_obj is not None:
-            metadata['timeslot'] = dt.datetime.strptime(timeslot_obj.group(1),
-                                                        '%Y%m%d%H%M')
-        elif pixelsize_obj is not None:
-            metadata['pixel_size'] = float(pixelsize_obj.group(1))
-        elif product_obj is not None:
-            metadata['product'] = product_obj.group(1)
-        elif subdatasets_obj is not None:
-            metadata['subdatasets'].append(subdatasets_obj.group(1))
-    if len(metadata['subdatasets']) == 0:
-        del metadata['subdatasets']
-    return metadata
-
-def _get_dataset_metadata(file_path):
-    metadata = dict()
-    the_info = _run_gdalinfo(file_path)
-    missing_value_re = re.compile(r'MISSING_VALUE=(-?\d+)')
-    n_cols_re = re.compile(r'N_COLS=(\d+)')
-    n_lines_re = re.compile(r'N_LINES=(\d+)')
-    scaling_factor_re = re.compile(r'SCALING_FACTOR=(\d+)')
-    dataset_name_re = re.compile(r'_PRODUCT=(\w+)')
-    for line in the_info.split('\n'):
-        missing_value_obj = missing_value_re.search(line)
-        n_cols_obj = n_cols_re.search(line)
-        n_lines_obj = n_lines_re.search(line)
-        scaling_factor_obj = scaling_factor_re.search(line)
-        dataset_name_obj = dataset_name_re.search(line)
-        if missing_value_obj is not None:
-            metadata['missing_value'] = int(missing_value_obj.group(1))
-        elif n_cols_obj is not None:
-            metadata['n_cols'] = int(n_cols_obj.group(1))
-        elif n_lines_obj is not None:
-            metadata['n_lines'] = int(n_lines_obj.group(1))
-        elif scaling_factor_obj is not None:
-            metadata['scaling_factor'] = int(scaling_factor_obj.group(1))
-        elif dataset_name_obj is not None:
-            metadata['name'] = dataset_name_obj.group(1)
-    return metadata
-
-def _get_geotiff_metadata(file_path):
-    metadata = dict()
-    the_info = _run_gdalinfo(file_path)
-    missing_value_re = re.compile(r'NoData Value=(-?\d+)')
-    product_re = re.compile(r'(?<!_)PRODUCT=(\w+)')
-    dataset_re = re.compile(r'_PRODUCT=(\w+)')
-    timeslot_re = re.compile(r'IMAGE_ACQUISITION_TIME=(\d{12})')
-    for line in the_info.split('\n'):
-        mv_obj = missing_value_re.search(line)
-        p_obj = product_re.search(line)
-        d_obj = dataset_re.search(line)
-        t_obj = timeslot_re.search(line)
-        if mv_obj is not None:
-            metadata['missing_value'] = int(mv_obj.group(1))
-        elif p_obj is not None:
-            metadata['product'] = p_obj.group(1)
-        elif d_obj is not None:
-            metadata['dataset'] = d_obj.group(1)
-        elif t_obj is not None:
-            metadata['timeslot'] = t_obj.group(1)
-    return metadata
-
+#
+#def _get_general_metadata(h5_path):
+#    '''
+#    retrieve subdatasets, first lat and lon, no data, missing value, pixel size, etc.
+#    '''
+#
+#    the_info = _run_gdalinfo(h5_path)
+#    metadata = dict()
+#    metadata['subdatasets'] = _extract_subdataset_paths(the_info).values()
+#    if len(metadata['subdatasets']) == 0:
+#        del metadata['subdatasets']
+#    lat_re = re.compile(r'FIRST_LAT=(-?\d+)')
+#    lon_re = re.compile(r'FIRST_LON=(-?\d+)')
+#    timeslot_re = re.compile(r'IMAGE_ACQUISITION_TIME=(\d+)')
+#    pixelsize_re = re.compile(r'PIXEL_SIZE=(\d+\.?\d*)')
+#    product_re = re.compile(r'^PRODUCT=(\w+)')
+#    for line in the_info.split('\n'):
+#        lat_obj = lat_re.search(line)
+#        lon_obj = lon_re.search(line)
+#        timeslot_obj = timeslot_re.search(line)
+#        pixelsize_obj = pixelsize_re.search(line)
+#        product_obj = product_re.search(line)
+#        if lat_obj is not None:
+#            metadata['first_lat'] = float(lat_obj.group(1))
+#        elif lon_obj is not None:
+#            metadata['first_lon'] = float(lon_obj.group(1))
+#        elif timeslot_obj is not None:
+#            metadata['timeslot'] = dt.datetime.strptime(timeslot_obj.group(1),
+#                                                        '%Y%m%d%H%M')
+#        elif pixelsize_obj is not None:
+#            metadata['pixel_size'] = float(pixelsize_obj.group(1))
+#        elif product_obj is not None:
+#            metadata['product'] = product_obj.group(1)
+#    return metadata
+#
+#def _get_dataset_metadata(file_path):
+#    metadata = dict()
+#    the_info = _run_gdalinfo(file_path)
+#    missing_value_re = re.compile(r'MISSING_VALUE=(-?\d+)')
+#    n_cols_re = re.compile(r'N_COLS=(\d+)')
+#    n_lines_re = re.compile(r'N_LINES=(\d+)')
+#    scaling_factor_re = re.compile(r'SCALING_FACTOR=(\d+)')
+#    dataset_name_re = re.compile(r'_PRODUCT=(\w+)')
+#    for line in the_info.split('\n'):
+#        missing_value_obj = missing_value_re.search(line)
+#        n_cols_obj = n_cols_re.search(line)
+#        n_lines_obj = n_lines_re.search(line)
+#        scaling_factor_obj = scaling_factor_re.search(line)
+#        dataset_name_obj = dataset_name_re.search(line)
+#        if missing_value_obj is not None:
+#            metadata['missing_value'] = int(missing_value_obj.group(1))
+#        elif n_cols_obj is not None:
+#            metadata['n_cols'] = int(n_cols_obj.group(1))
+#        elif n_lines_obj is not None:
+#            metadata['n_lines'] = int(n_lines_obj.group(1))
+#        elif scaling_factor_obj is not None:
+#            metadata['scaling_factor'] = int(scaling_factor_obj.group(1))
+#        elif dataset_name_obj is not None:
+#            metadata['name'] = dataset_name_obj.group(1)
+#    return metadata
+#
+#def _get_geotiff_metadata(file_path):
+#    metadata = dict()
+#    the_info = _run_gdalinfo(file_path)
+#    missing_value_re = re.compile(r'NoData Value=(-?\d+)')
+#    product_re = re.compile(r'(?<!_)PRODUCT=(\w+)')
+#    dataset_re = re.compile(r'_PRODUCT=(\w+)')
+#    timeslot_re = re.compile(r'IMAGE_ACQUISITION_TIME=(\d{12})')
+#    for line in the_info.split('\n'):
+#        mv_obj = missing_value_re.search(line)
+#        p_obj = product_re.search(line)
+#        d_obj = dataset_re.search(line)
+#        t_obj = timeslot_re.search(line)
+#        if mv_obj is not None:
+#            metadata['missing_value'] = int(mv_obj.group(1))
+#        elif p_obj is not None:
+#            metadata['product'] = p_obj.group(1)
+#        elif d_obj is not None:
+#            metadata['dataset'] = d_obj.group(1)
+#        elif t_obj is not None:
+#            metadata['timeslot'] = t_obj.group(1)
+#    return metadata
+#
 def _run_gdalinfo(file_path):
     with settings(hide('stdout')):
         result = local('gdalinfo %s' % file_path, capture=True)
     return result
 
-def _extract_metadata(gdalinfo_stdout):
+def _extract_metadata(file_path):
+    gdalinfo = _run_gdalinfo(file_path)
+    subdatasets = _extract_subdataset_paths(gdalinfo)
     start_md_line = False
     metadata = dict()
-    for line in gdalinfo_stdout.split('\n'):
+    if len(subdatasets) > 0:
+        metadata['subdatasets'] = dict()
+        for sds, path in subdatasets.iteritems():
+            metadata['subdatasets'][sds] = {'path' : path}
+    for line in gdalinfo.split('\n'):
         if start_md_line:
             line_obj = re.search(r'^\s+(?P<key>\w+)=(?P<value>.*)$', line)
             if line_obj is not None:
                 group = line_obj.groupdict()
-                metadata[group['key']] = group['value']
+                try:
+                    is_subdataset_metadata = False
+                    for sds in metadata['subdatasets'].keys():
+                        found_sds_obj = re.search(r'^%s' % sds, group['key'])
+                        if found_sds_obj is not None:
+                            the_key = re.sub('%s_' % sds, '', group['key'])
+                            metadata['subdatasets'][sds][the_key] = group['value']
+                            is_subdataset_metadata = True
+                    if not is_subdataset_metadata:
+                        metadata[group['key']] = group['value']
+                except KeyError:
+                    metadata[group['key']] = group['value']
             else:
                 start_md_line = False
         else:
             if re.search('^\s*Metadata:\s*$', line) is not None:
                 start_md_line = True
+    #_parse_metadata(metadata)
     return metadata
 
 def _extract_subdataset_paths(gdalinfo_stdout):
@@ -302,9 +326,16 @@ def _extract_band_properties(gdalinfo_stdout):
             bands[g(1)] = {'block_x' : g(2), 'block_y' : g(3), 'dtype' : g(4)}
     return bands
 
-def get_meta(file_path):
-    info = _run_gdalinfo(file_path)
-    meta = _extract_metadata(info)
-    datasets = _extract_subdataset_paths(info)
-    bands = _extract_band_properties(info)
-    return meta, datasets, bands
+#def _parse_metadata(metadata):
+#
+#    # first deal with simple metadata fields, that just need direct conversion
+#    # to normal python types
+#    int_fields = ['NL', 'NC', 'FIRST_LAT', 'FIRST_LON']
+#    for f in int_fields:
+#        metadata[f] = int(metadata[f])
+#
+#    # now deal with more complex metadata fields
+#    pixel_size = metadata.get('PIXEL_SIZE')
+#    if pixel_size is not None:
+#        ps = float(re.search(r'(\d+\.?\d*)', pixel_size).group())
+#        metadata['PIXEL_SIZE'] = ps
