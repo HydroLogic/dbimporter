@@ -30,14 +30,14 @@ import datetime as dt
 from lxml import etree
 from fabric.api import local, settings, hide
 
-# TODO - replace the placeholder code with a real implementation
-#def process_timeslot(working_dir, product, timeslot,
-#                     db_name=None, db_user=None, db_pass=None):
-#    patt = r'^g2_BIOPAR_%s_%s_[A-Z]+_GEO_v1$' % (product, timeslot)
-#    tiles = _get_tiles(working_dir, patt)
-#    georefs = _georeference_tiles(*tiles)
-#    global_datasets = _merge_tiles(*georefs)
-#    #_import_into_database(db_name, db_user, db_pass, *global_datasets)
+def process_timeslot(working_dir, product, timeslot,
+                     db_name=None, db_user=None, db_pass=None):
+    patt = r'^g2_BIOPAR_%s_%s_[A-Z]+_GEO_v1$' % (product, timeslot)
+    tiles = _get_tiles(working_dir, patt)
+    georefs = _georeference_tiles(*tiles)
+    global_datasets = _merge_tiles(*georefs)
+    vrt_path = _build_vrt(working_dir, *global_datasets)
+    #_import_into_database(db_name, db_user, db_pass, vrt_path)
 
 def _get_tiles(working_dir, file_name_pattern):
     '''
@@ -64,6 +64,7 @@ def _merge_tiles(*tiles):
 
     mosaics = []
     datasets = dict()
+    product = re.search(r'g2_BIOPAR_(\w+)_\d{12}', tiles[0]).group(1)
     for path in tiles:
         dataset = re.search('v1_(\w+).tif$', path).group(1)
         if dataset in datasets.keys():
@@ -72,29 +73,24 @@ def _merge_tiles(*tiles):
             datasets[dataset] = [path]
     for dataset, tiles in datasets.iteritems():
         print('file: %s' % tiles[0])
-        md = _get_geotiff_metadata(tiles[0])
-        print('md: %s' % md)
+        md = _extract_metadata(tiles[0])
 
         output_dir = os.path.dirname(tiles[0])
-        output_path = '%s/global_%s_%s_%s.tif' % (output_dir, md['product'],
-                                                  md['timeslot'], dataset)
-        print('timeslot: %s' % md['timeslot'])
-        print('product: %s' % md['product'])
-        print('missing_value: %s' % md['missing_value'])
-        print('output_path: %s' % output_path)
-
+        ts = md['IMAGE_ACQUISITION_TIME'].strftime('%Y%m%d%H%M')
+        output_path = '%s/global_%s_%s_%s.tif' % (output_dir, product,
+                                                  ts, dataset)
         local('gdal_merge.py -o %s -a_nodata %s %s' % (output_path,
-              md['missing_value'], ' '.join(tiles)))
+              md['MISSING_VALUE'], ' '.join(tiles)))
         mosaics.append(output_path)
     return mosaics
 
-def _build_vrt(*global_files):
+def _build_vrt(working_dir, *global_files):
     '''
     Build a VRT file with each of the already created global files as a band.
     '''
 
-    x_size = 7200
-    y_size = 2800
+    x_size = '7200'
+    y_size = '2800'
     dtype = 'Int16'
     root = etree.Element('VRTDataset', rasterXSize=x_size, rasterYSize=y_size)
     srs = etree.SubElement(root, 'srs')
@@ -102,18 +98,19 @@ def _build_vrt(*global_files):
     geo_transform = etree.SubElement(root, 'GeoTransform')
     geo_transform.text = '-170.025, 0.05, 0, 80.025, 0, -0.05'
     for i, file_path in enumerate(global_files):
-        band = etree.SubElement(root, 'VRTRasterBand', 
-                                {'dataType' : dtype, 'band': i+1})
+        global_meta = _get_global_meta(file_path)
+        band = etree.SubElement(root, 'VRTRasterBand', {'dataType' : dtype,
+                                'band': '%i' % (i+1)})
         description = etree.SubElement(band, 'Description')
-        description.text = ''
+        description.text = global_meta.get('subdataset')
         no_data = etree.SubElement(band, 'NoDataValue')
-        no_data.text = ''
+        no_data.text = '%s' % global_meta.get('MISSING_VALUE')
         scale = etree.SubElement(band, 'Scale')
-        scale.text = ''
+        scale.text = '%s' % global_meta.get('SCALING_FACTOR')
         source = etree.SubElement(band, 'SimpleSource')
-        file_path = etree.SubElement(source, 'SourceFileName', 
-                                     {'relativeToVrt' : 0})
-        file_path.text = ''
+        source_path = etree.SubElement(source, 'SourceFileName', 
+                                     {'relativeToVrt' : '0'})
+        source_path.text = file_path
         source_band = etree.SubElement(source, 'SourceBand')
         source_band.text = '1'
         source_properties = etree.SubElement(source, 'SourceProperties',
@@ -121,62 +118,84 @@ def _build_vrt(*global_files):
                                               'RasterYSize' : y_size,
                                               'DataType' : dtype,
                                               'BlockXSize' : x_size,
-                                              'BlockYSize' : 1})
-        src_rect = etree.SubElement(source, 'SrcRect', {'xOff' : 0,
-                                                        'yOff' : 0,
+                                              'BlockYSize' : '1'})
+        src_rect = etree.SubElement(source, 'SrcRect', {'xOff' : '0',
+                                                        'yOff' : '0',
+                                                        'xSize' : x_size,
+                                                        'ySize' : y_size})
+        dst_rect = etree.SubElement(source, 'DstRect', {'xOff' : '0',
+                                                        'yOff' : '0',
                                                         'xSize' : x_size,
                                                         'ySize' : y_size})
     tree = etree.ElementTree(root)
-    tree.write('', pretty_print=True)
+    tree.write(os.path.join(working_dir, 'out.vrt'), pretty_print=True)
 
-def _import_into_database(db_name, db_user, db_pass, *global_datasets):
+def _get_global_meta(global_product):
+    ds = re.search(r'_\d{12}_([\w_]+)\.tif$', global_product).group(1)
+    global_meta = {'subdataset' : ds}
+    working_dir = os.path.dirname(global_product)
+    all_files = os.listdir(working_dir)
+    found_one = False
+    count = 0
+    while not found_one:
+        full_path = os.path.join(working_dir, all_files[count])
+        if re.search(r'v1_%s\.tif' % ds, full_path) is not None:
+            meta = _extract_metadata(full_path)
+            global_meta['SCALING_FACTOR'] = meta['SCALING_FACTOR']
+            global_meta['MISSING_VALUE'] = meta['MISSING_VALUE']
+            global_meta['size_x'] = meta['size_x']
+            global_meta['size_y'] = meta['size_y']
+            found_one = True
+        count +=1
+    return global_meta
+
+def _import_into_database_multiple_bands(db_name, db_user, db_pass,
+                                         *global_datasets):
     '''
     Take the global mosaic and import it into the PostGIS database.
 
-    Will use the raster2pgsql utility
+    1 - Will use the raster2pgsql utility to import the vrt file into the database
+    2 - insert additional data in the respective rows (timeslot, ...)
     '''
 
     pass
 
-#def _georeference_tiles(*tiles):
-#    '''
-#    Take the product HDF5 tiles and georeference them.
-#
-#    Note that GDAL uses top left corner of pixel as a way to anchor its
-#    coordinates.
-#    '''
-#
-#    georefs = []
-#    for tile in tiles:
-#        working_dir = os.path.dirname(tile)
-#
-#        tile_meta = _extract_metadata(tile)
-#        tile_datasets = _extract_subdataset_paths(tile)
-#        for ds_name, ds_path in tile_datasets.iteritems():
-#            ds_meta = _extract_metadata(ds_path)
-#            ulx, uly, lrx, lry = _calculate_bounds(tile_meta['FIRST_LON'],
-#                                                   tile_meta['FIRST_LAT'],
-#                                                   ds_meta['N_COLS'],
-#                                                   ds_meta['N_LINES'],
-#                                                   tile_meta['PIXEL_SIZE'])
-#        #general_md = _get_general_metadata(tile)
-#        #for ds_path in general_md.get('subdatasets', []):
-#        #    dataset_md = _get_dataset_metadata(ds_path)
-#        #    ulx, uly, lrx, lry = _calculate_bounds(general_md['first_lon'],
-#        #                                           general_md['first_lat'],
-#        #                                           dataset_md['n_cols'],
-#        #                                           dataset_md['n_lines'],
-#        #                                           general_md['pixel_size'])
-#            path, extension = os.path.splitext(tile)
-#            output_path = '%s_%s.tif' % (path, ds_name)
-#            output_crs = 'EPSG:4326'
-#            with settings(hide('stdout')):
-#                local('gdal_translate -q -of GTiff -a_srs "%s" -a_ullr ' \
-#                      '%6.3f %6.3f %6.3f %6.3f -a_nodata %s %s %s' % \
-#                      (output_crs, ulx, uly, lrx, lry,
-#                      dataset_md['missing_value'], ds_path, output_path))
-#            georefs.append(output_path)
-#    return georefs
+def _import_into_database(db_name, db_user, db_pass, vrt file):
+    pass
+
+def _georeference_tiles(*tiles):
+    '''
+    Take the product HDF5 tiles and georeference them.
+
+    Note that GDAL uses top left corner of pixel as a way to anchor its
+    coordinates.
+    '''
+
+    georefs = []
+    for tile in tiles:
+        working_dir = os.path.dirname(tile)
+
+        file_meta = _extract_metadata(tile)
+        for ds_name, ds_meta in file_meta['subdatasets'].iteritems():
+            ulx, uly, lrx, lry = _calculate_bounds(file_meta['FIRST_LON'],
+                                                   file_meta['FIRST_LAT'],
+                                                   ds_meta['N_COLS'],
+                                                   ds_meta['N_LINES'],
+                                                   file_meta['PIXEL_SIZE'])
+            path, extension = os.path.splitext(tile)
+            output_path = '%s_%s.tif' % (path, ds_name)
+            output_crs = 'EPSG:4326'
+            gdal_cmd = 'gdal_translate -q -of GTiff -a_srs "%s" -a_ullr ' \
+                       '%6.3f %6.3f %6.3f %6.3f -a_nodata %s' % \
+                       (output_crs, ulx, uly, lrx, lry,
+                        ds_meta['MISSING_VALUE'])
+            for meta_name, meta_val in ds_meta.iteritems():
+                gdal_cmd += ' -mo "%s=%s"' % (meta_name, meta_val)
+            gdal_cmd += ' %s %s' % (ds_meta['path'], output_path)
+            with settings(hide('stdout')):
+                local(gdal_cmd)
+            georefs.append(output_path)
+    return georefs
 
 def _calculate_bounds(first_lon, first_lat, n_cols, n_lines, pixel_size):
     upper_left_lon = first_lon - pixel_size / 2.0
@@ -275,12 +294,16 @@ def _run_gdalinfo(file_path):
 def _extract_metadata(file_path):
     gdalinfo = _run_gdalinfo(file_path)
     subdatasets = _extract_subdataset_paths(gdalinfo)
+    bands = _extract_band_properties(gdalinfo)
     start_md_line = False
     metadata = dict()
     if len(subdatasets) > 0:
         metadata['subdatasets'] = dict()
         for sds, path in subdatasets.iteritems():
             metadata['subdatasets'][sds] = {'path' : path}
+    if len(bands) > 0:
+        metadata['bands'] = bands
+    metadata['size_x'], metadata['size_y'] = _extract_size(gdalinfo)
     for line in gdalinfo.split('\n'):
         if start_md_line:
             line_obj = re.search(r'^\s+(?P<key>\w+)=(?P<value>.*)$', line)
@@ -303,7 +326,7 @@ def _extract_metadata(file_path):
         else:
             if re.search('^\s*Metadata:\s*$', line) is not None:
                 start_md_line = True
-    #_parse_metadata(metadata)
+    _parse_metadata(metadata)
     return metadata
 
 def _extract_subdataset_paths(gdalinfo_stdout):
@@ -326,16 +349,40 @@ def _extract_band_properties(gdalinfo_stdout):
             bands[g(1)] = {'block_x' : g(2), 'block_y' : g(3), 'dtype' : g(4)}
     return bands
 
-#def _parse_metadata(metadata):
-#
-#    # first deal with simple metadata fields, that just need direct conversion
-#    # to normal python types
-#    int_fields = ['NL', 'NC', 'FIRST_LAT', 'FIRST_LON']
-#    for f in int_fields:
-#        metadata[f] = int(metadata[f])
-#
-#    # now deal with more complex metadata fields
-#    pixel_size = metadata.get('PIXEL_SIZE')
-#    if pixel_size is not None:
-#        ps = float(re.search(r'(\d+\.?\d*)', pixel_size).group())
-#        metadata['PIXEL_SIZE'] = ps
+def _extract_size(gdalinfo_stdout):
+    size_x = 0
+    size_y = 0
+    for line in gdalinfo_stdout.split('\n'):
+        line_obj = re.search(r'^Size is (\d+), (\d+)', line)
+        if line_obj is not None:
+            size_x = line_obj.group(1)
+            size_y = line_obj.group(2)
+    return size_x, size_y
+
+def _parse_metadata(metadata):
+
+    # first deal with simple metadata fields, that just need direct conversion
+    # to normal python types
+    int_fields = ['NL', 'NC', 'N_COLS', 'N_LINES', 'MISSING_VALUE',
+                  'SCALING_FACTOR', 'FIRST_LAT', 'FIRST_LON', 'size_x',
+                  'size_y']
+    for f in int_fields:
+        if metadata.get(f) is not None:
+            metadata[f] = int(metadata[f])
+        elif metadata.get('subdatasets') is not None:
+            for sds, metas in metadata['subdatasets'].iteritems():
+                if metas.get(f) is not None:
+                    metas[f] = int(metas[f])
+        elif metadata.get('bands') is not None:
+            for band_num, metas in metadata['bands'].iteritems():
+                if metas.get(f) is not None:
+                    metas[f] = int(metas[f])
+    # now deal with more complex metadata fields
+    pixel_size = metadata.get('PIXEL_SIZE')
+    if pixel_size is not None:
+        ps = float(re.search(r'(\d+\.?\d*)', pixel_size).group())
+        metadata['PIXEL_SIZE'] = ps
+    acq_time = metadata.get('IMAGE_ACQUISITION_TIME')
+    if acq_time is not None:
+        metadata['IMAGE_ACQUISITION_TIME'] = dt.datetime.strptime(acq_time,
+                                                                  '%Y%m%d%H%M')
