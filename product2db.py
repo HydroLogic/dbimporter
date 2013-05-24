@@ -25,19 +25,23 @@ NOTES:
 
 import re
 import os
+import argparse
 import datetime as dt
+from subprocess import Popen, PIPE
 
 from lxml import etree
-from fabric.api import local, settings, hide
+import psycopg2
 
 def process_timeslot(working_dir, product, timeslot,
-                     db_name=None, db_user=None, db_pass=None):
+                     db_name='gistestes', db_user='gisuser', db_pass='gisuser'):
     patt = r'^g2_BIOPAR_%s_%s_[A-Z]+_GEO_v1$' % (product, timeslot)
     tiles = _get_tiles(working_dir, patt)
     georefs = _georeference_tiles(*tiles)
     global_datasets = _merge_tiles(*georefs)
     vrt_path = _build_vrt(working_dir, *global_datasets)
     #_import_into_database(db_name, db_user, db_pass, vrt_path)
+    _import_into_database_multiple_bands(db_name, db_user, db_pass,
+                                         *global_datasets)
 
 def _get_tiles(working_dir, file_name_pattern):
     '''
@@ -79,8 +83,9 @@ def _merge_tiles(*tiles):
         ts = md['IMAGE_ACQUISITION_TIME'].strftime('%Y%m%d%H%M')
         output_path = '%s/global_%s_%s_%s.tif' % (output_dir, product,
                                                   ts, dataset)
-        local('gdal_merge.py -o %s -a_nodata %s %s' % (output_path,
-              md['MISSING_VALUE'], ' '.join(tiles)))
+        process = Popen(['gdal_merge.py', '-o', output_path,
+                        '-a_nodata', str(md['MISSING_VALUE'])] + tiles)
+        process.communicate()
         mosaics.append(output_path)
     return mosaics
 
@@ -149,18 +154,48 @@ def _get_global_meta(global_product):
         count +=1
     return global_meta
 
+def _connect_to_database(database, user, password):
+    return psycopg2.connect('host=127.0.0.1 dbname=%s user=%s password=%s' % \
+                            (database, user, password))
+
 def _import_into_database_multiple_bands(db_name, db_user, db_pass,
                                          *global_datasets):
     '''
     Take the global mosaic and import it into the PostGIS database.
 
     1 - Will use the raster2pgsql utility to import the vrt file into the database
+    2 - Save the correct value for the fields
     2 - insert additional data in the respective rows (timeslot, ...)
     '''
 
-    pass
+    connection = _connect_to_database(db_name, db_user, db_pass)
+    cursor = connection.cursor()
+    cursor.execute('SELECT table_name FROM information_schema.tables ' \
+                   'WHERE table_schema = \'public\'')
+    connection.commit()
+    table_names = cursor.fetchall()
+    print('available tables: %s' % table_names)
+    for ds in global_datasets:
+        main_product = re.search(r'global_(\w+)_\d{12}', ds).group(1)
+        meta = _get_global_meta(ds)
+        sub_ds = meta['subdataset']
+        if sub_ds == main_product:
+            table_name = main_product.lower()
+        else:
+            table_name = ('%s_%s' % (main_product, meta['subdataset'])).lower()
 
-def _import_into_database(db_name, db_user, db_pass, vrt file):
+def _import_into_database(db_name, db_user, db_pass, vrt_file):
+    '''
+    '''
+
+    # first check if the same raster is already in the database
+    # import the raster
+    # perform the rescaling of the values
+    # add band names
+
+
+    #local('raster2pgsql -s 4326 -t 200x200 -a -l 2,4,8,16,32,64 -M -C ' \
+    #      '%s lst' % vrt_file)
     pass
 
 def _georeference_tiles(*tiles):
@@ -192,8 +227,8 @@ def _georeference_tiles(*tiles):
             for meta_name, meta_val in ds_meta.iteritems():
                 gdal_cmd += ' -mo "%s=%s"' % (meta_name, meta_val)
             gdal_cmd += ' %s %s' % (ds_meta['path'], output_path)
-            with settings(hide('stdout')):
-                local(gdal_cmd)
+            process = Popen(gdal_cmd, shell=True)
+            process.communicate()
             georefs.append(output_path)
     return georefs
 
@@ -287,9 +322,9 @@ def _calculate_bounds(first_lon, first_lat, n_cols, n_lines, pixel_size):
 #    return metadata
 #
 def _run_gdalinfo(file_path):
-    with settings(hide('stdout')):
-        result = local('gdalinfo %s' % file_path, capture=True)
-    return result
+    process = Popen(['gdalinfo', file_path], stdout=PIPE, stderr=PIPE)
+    stdout, stderr = process.communicate()
+    return stdout
 
 def _extract_metadata(file_path):
     gdalinfo = _run_gdalinfo(file_path)
@@ -386,3 +421,20 @@ def _parse_metadata(metadata):
     if acq_time is not None:
         metadata['IMAGE_ACQUISITION_TIME'] = dt.datetime.strptime(acq_time,
                                                                   '%Y%m%d%H%M')
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('product_name', help='The name of the product to ' \
+                        'process.')
+    parser.add_argument('timeslot', help='The timeslot to process.')
+    parser.add_argument('working_directory', help='The directory where the ' \
+                        'files are located. It will be used to store ' \
+                        'temporary files as well.')
+    parser.add_argument('-d', '--database', help='The name of the PostGIS ' \
+                        'database where the data is to be stored.')
+    parser.add_argument('-u', '--user', help='The name of the database user.')
+    parser.add_argument('-p', '--password', help='The password of the ' \
+                        'database user.')
+    args = parser.parse_args()
+    process_timeslot(args.working_directory, args.product_name, args.timeslot,
+                     args.database, args.user, args.password)
